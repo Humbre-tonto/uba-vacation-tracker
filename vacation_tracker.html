@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Team Vacation Tracker</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6;
+        }
+        .container {
+            max-width: 100vw;
+            padding: 1rem;
+        }
+        .header-cell {
+            min-width: 5rem;
+            max-width: 8rem;
+            white-space: nowrap;
+        }
+        .vacation-day-cell {
+            min-width: 2.5rem;
+            text-align: center;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        .vacation-day-cell:hover {
+            background-color: #e5e7eb;
+        }
+        .taken-day {
+            background-color: #ef4444;
+            color: white;
+        }
+        .taken-day:hover {
+            background-color: #dc2626;
+        }
+        .day-label {
+            writing-mode: vertical-rl;
+            text-orientation: mixed;
+            transform: rotate(180deg);
+        }
+        .sticky-col {
+            position: sticky;
+            left: 0;
+            background-color: white;
+            z-index: 10;
+        }
+    </style>
+</head>
+<body>
+    <!-- Main container -->
+    <div class="container mx-auto p-4 md:p-8">
+        <h1 class="text-3xl md:text-4xl font-bold text-center text-gray-800 mb-6">Team Vacation Tracker</h1>
+        
+        <!-- User ID display -->
+        <div id="userIdDisplay" class="text-center text-gray-600 mb-4 p-2 bg-gray-200 rounded-lg">
+            Loading user ID...
+        </div>
+
+        <!-- Add Member Form -->
+        <div class="mb-8 p-4 bg-white rounded-lg shadow-md">
+            <h2 class="text-xl font-semibold mb-3 text-gray-700">Add New Team Member</h2>
+            <form id="add-member-form" class="flex flex-col sm:flex-row gap-4">
+                <input type="text" id="memberNameInput" placeholder="Enter name" required class="flex-1 p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <input type="number" id="vacationDaysInput" placeholder="Initial days" value="15" required class="w-24 p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-lg transition-colors duration-200">
+                    Add Member
+                </button>
+            </form>
+        </div>
+
+        <!-- Spreadsheet Table -->
+        <div class="overflow-x-auto bg-white rounded-lg shadow-md">
+            <table class="min-w-full divide-y divide-gray-200" id="vacation-table">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th scope="col" class="sticky-col px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Days Left</th>
+                        <!-- Dates will be populated by JavaScript -->
+                    </tr>
+                </thead>
+                <tbody class="bg-white divide-y divide-gray-200" id="vacation-table-body">
+                    <!-- Table rows will be populated by JavaScript -->
+                </tbody>
+            </table>
+        </div>
+    </div>
+    
+    <!-- Modal for messages -->
+    <div id="message-modal" class="fixed inset-0 bg-gray-600 bg-opacity-50 hidden items-center justify-center p-4" onclick="this.style.display='none'">
+        <div class="bg-white p-6 rounded-lg shadow-xl max-w-sm w-full" onclick="event.stopPropagation()">
+            <h3 class="text-xl font-bold mb-4 text-gray-800" id="modal-title"></h3>
+            <p class="text-gray-700 mb-4" id="modal-message"></p>
+            <button onclick="document.getElementById('message-modal').style.display='none'" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 rounded-lg transition-colors duration-200">
+                OK
+            </button>
+        </div>
+    </div>
+
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, query, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        setLogLevel('debug');
+
+        // Global variables for Firebase setup
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        let db, auth, userId;
+
+        // Function to show a custom modal message
+        function showMessage(title, message) {
+            document.getElementById('modal-title').textContent = title;
+            document.getElementById('modal-message').textContent = message;
+            document.getElementById('message-modal').style.display = 'flex';
+        }
+
+        // Initialize Firebase and Authentication
+        async function initializeFirebase() {
+            if (!firebaseConfig) {
+                console.error("Firebase config is not available. Using localStorage for data persistence.");
+                setupAppWithLocalStorage();
+                return;
+            }
+
+            try {
+                const app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+                
+                await new Promise(resolve => {
+                    onAuthStateChanged(auth, async (user) => {
+                        if (user) {
+                            userId = user.uid;
+                        } else {
+                            userId = crypto.randomUUID();
+                            await signInAnonymously(auth);
+                        }
+                        console.log("Firebase Auth State Changed. User ID:", userId);
+                        document.getElementById('userIdDisplay').textContent = `User ID: ${userId}`;
+                        resolve();
+                    });
+                });
+
+                if (initialAuthToken) {
+                    await signInWithCustomToken(auth, initialAuthToken);
+                }
+
+                setupAppWithFirestore();
+
+            } catch (error) {
+                console.error("Error initializing Firebase:", error);
+                showMessage("Firebase Error", "Could not initialize Firebase. Check the console for details. Using localStorage as a fallback.");
+                setupAppWithLocalStorage();
+            }
+        }
+
+        // --- Data Logic and Rendering ---
+
+        // Function to get all dates until the end of the year
+        const getDatesUntilEndOfYear = () => {
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            const endOfYear = new Date(today.getFullYear(), 11, 31);
+            const dates = [];
+            let currentDate = new Date(today);
+            while (currentDate <= endOfYear) {
+                dates.push(new Date(currentDate));
+                currentDate.setDate(currentDate.getDate() + 1);
+            }
+            return dates;
+        };
+
+        const dates = getDatesUntilEndOfYear();
+        const dateStrings = dates.map(date => date.toISOString().slice(0, 10)); // YYYY-MM-DD format
+
+        // Renders the table with provided data
+        const renderTable = (members) => {
+            const tableBody = document.getElementById('vacation-table-body');
+            const tableHead = document.querySelector('#vacation-table thead tr');
+            tableBody.innerHTML = '';
+            
+            // Add date headers if not already present
+            if (tableHead.children.length <= 2) {
+                const dateHeaderFragment = document.createDocumentFragment();
+                dates.forEach(date => {
+                    const th = document.createElement('th');
+                    th.scope = 'col';
+                    th.className = 'vacation-day-cell px-2 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider';
+                    th.innerHTML = `<span class="day-label">${date.toLocaleString('default', { month: 'short', day: 'numeric' })}</span>`;
+                    dateHeaderFragment.appendChild(th);
+                });
+                tableHead.appendChild(dateHeaderFragment);
+            }
+
+            members.forEach(member => {
+                const row = document.createElement('tr');
+                row.className = 'hover:bg-gray-100 transition-colors duration-150';
+
+                // Name cell
+                const nameCell = document.createElement('td');
+                nameCell.className = 'sticky-col px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900';
+                nameCell.textContent = member.name;
+                row.appendChild(nameCell);
+
+                // Days Left cell
+                const daysLeftCell = document.createElement('td');
+                daysLeftCell.className = 'px-6 py-4 whitespace-nowrap text-sm text-gray-500 font-bold';
+                daysLeftCell.textContent = member.vacationDaysLeft;
+                row.appendChild(daysLeftCell);
+
+                // Vacation days cells
+                dateStrings.forEach(dateStr => {
+                    const dayCell = document.createElement('td');
+                    dayCell.className = `vacation-day-cell px-2 py-4 whitespace-nowrap text-xs text-gray-500 border-l border-gray-100`;
+                    
+                    const isTaken = member.takenDays.includes(dateStr);
+                    if (isTaken) {
+                        dayCell.classList.add('taken-day');
+                    }
+                    
+                    dayCell.dataset.date = dateStr;
+                    dayCell.dataset.memberId = member.id;
+                    dayCell.onclick = (event) => handleVacationDayClick(event);
+                    row.appendChild(dayCell);
+                });
+
+                tableBody.appendChild(row);
+            });
+        };
+
+        // --- Data persistence logic ---
+        
+        // This function handles the click event for both Firestore and LocalStorage
+        async function handleVacationDayClick(event) {
+            const cell = event.target;
+            const memberId = cell.dataset.memberId;
+            const dateStr = cell.dataset.date;
+
+            // Use Firestore if 'db' is initialized, otherwise use localStorage
+            if (db) {
+                const docRef = doc(db, `/artifacts/${appId}/public/data/vacation-tracker/${memberId}`);
+                
+                try {
+                    const docSnap = await getDoc(docRef);
+                    if (docSnap.exists()) {
+                        const memberData = docSnap.data();
+                        const takenDays = new Set(memberData.takenDays);
+                        let daysLeft = memberData.vacationDaysLeft;
+                        
+                        if (takenDays.has(dateStr)) {
+                            takenDays.delete(dateStr);
+                            daysLeft++;
+                        } else {
+                            takenDays.add(dateStr);
+                            daysLeft--;
+                        }
+                        
+                        if (daysLeft < 0) {
+                            showMessage("Vacation Day Limit", "This member does not have enough vacation days left.");
+                            return;
+                        }
+
+                        await setDoc(docRef, {
+                            ...memberData,
+                            takenDays: Array.from(takenDays),
+                            vacationDaysLeft: daysLeft
+                        });
+                    }
+                } catch (e) {
+                    console.error("Error updating document: ", e);
+                    showMessage("Database Error", "Failed to update vacation days. Check the console for details.");
+                }
+            } else { // Local storage fallback logic
+                const members = JSON.parse(localStorage.getItem('vacation-tracker-data')) || [];
+                const memberIndex = members.findIndex(m => m.id === memberId);
+
+                if (memberIndex !== -1) {
+                    const member = members[memberIndex];
+                    const takenDays = new Set(member.takenDays);
+                    let daysLeft = member.vacationDaysLeft;
+
+                    if (takenDays.has(dateStr)) {
+                        takenDays.delete(dateStr);
+                        daysLeft++;
+                    } else {
+                        if (daysLeft <= 0) {
+                            showMessage("Vacation Day Limit", "This member does not have enough vacation days left.");
+                            return;
+                        }
+                        takenDays.add(dateStr);
+                        daysLeft--;
+                    }
+                    
+                    member.takenDays = Array.from(takenDays);
+                    member.vacationDaysLeft = daysLeft;
+                    localStorage.setItem('vacation-tracker-data', JSON.stringify(members));
+                    renderTable(members);
+                }
+            }
+        }
+
+        // --- Firestore-specific initialization ---
+        function setupAppWithFirestore() {
+            const collectionPath = `/artifacts/${appId}/public/data/vacation-tracker`;
+            const collectionRef = collection(db, collectionPath);
+
+            // Real-time listener for updates
+            onSnapshot(collectionRef, (snapshot) => {
+                const members = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                renderTable(members);
+            }, (error) => {
+                console.error("Error listening to Firestore:", error);
+                showMessage("Real-time Error", "Could not connect to the real-time database. You may be viewing stale data. Check the console for more details.");
+            });
+
+            // Handle adding a new member
+            document.getElementById('add-member-form').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const nameInput = document.getElementById('memberNameInput');
+                const daysInput = document.getElementById('vacationDaysInput');
+
+                const newMember = {
+                    name: nameInput.value,
+                    initialVacationDays: parseInt(daysInput.value, 10),
+                    vacationDaysLeft: parseInt(daysInput.value, 10),
+                    takenDays: []
+                };
+
+                try {
+                    const docRef = doc(collection(db, collectionPath));
+                    await setDoc(docRef, newMember);
+                    nameInput.value = '';
+                    daysInput.value = '15';
+                } catch (e) {
+                    console.error("Error adding document: ", e);
+                    showMessage("Database Error", "Failed to add the new member. Check the console for details.");
+                }
+            });
+        }
+
+        // --- Fallback Local Storage Logic ---
+        function setupAppWithLocalStorage() {
+            document.getElementById('userIdDisplay').textContent = "User ID: Using local storage (no sync)";
+            let members = JSON.parse(localStorage.getItem('vacation-tracker-data')) || [];
+
+            const saveAndRender = () => {
+                localStorage.setItem('vacation-tracker-data', JSON.stringify(members));
+                renderTable(members);
+            };
+
+            if (members.length === 0) {
+                members = [
+                    { name: 'John Doe', initialVacationDays: 15, vacationDaysLeft: 15, takenDays: [], id: 'member1' },
+                    { name: 'Jane Smith', initialVacationDays: 15, vacationDaysLeft: 15, takenDays: [], id: 'member2' }
+                ];
+                saveAndRender();
+            } else {
+                renderTable(members);
+            }
+
+            document.getElementById('add-member-form').addEventListener('submit', (e) => {
+                e.preventDefault();
+                const nameInput = document.getElementById('memberNameInput');
+                const daysInput = document.getElementById('vacationDaysInput');
+                
+                const newMember = {
+                    name: nameInput.value,
+                    initialVacationDays: parseInt(daysInput.value, 10),
+                    vacationDaysLeft: parseInt(daysInput.value, 10),
+                    takenDays: [],
+                    id: crypto.randomUUID()
+                };
+                members.push(newMember);
+                saveAndRender();
+                nameInput.value = '';
+                daysInput.value = '15';
+            });
+        }
+
+        // Initialize the app
+        initializeFirebase();
+
+    </script>
+</body>
+</html>
